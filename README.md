@@ -20,18 +20,41 @@ work -- if you want the original, use the link above.
 - Added keyboard shortcuts for video playback: Space to play/pause,
   Left/Right arrow to step back/forward one frame
   ([`ui/video.py`](ui/video.py)).
-- Added review/sync markers: `M` drops a marker at the cursor,
-  `Shift+M` removes the nearest one, `[`/`]` jump to the previous/next
-  marker. Markers show up as orange vertical lines on both the
-  time/distance graph and the video alignment slider, and are saved
-  with your workspace ([`ui/video.py`](ui/video.py),
-  [`ui/timedist.py`](ui/timedist.py), [`ui/state.py`](ui/state.py)).
+- Added independent data/video sync markers, so you can mark the same
+  real-world moment in each even before they're aligned, then compute
+  the offset from the pair:
+  - `M` / `Shift+M` / `[` / `]`: add / remove nearest / jump to
+    prev-next **data** marker (placed in the data's own timeline).
+  - `V` / `Shift+V` / `Ctrl+[` / `Ctrl+]`: same, but for a **video**
+    marker (placed at the video's own raw playback position).
+  - `Ctrl+M`: "Sync video to data using markers" -- sets
+    `video_alignment` from the nearest data marker and nearest video
+    marker to where you currently are.
+  - Data markers are solid orange, video markers are dashed cyan, both
+    shown on the graph and the video alignment slider, and both are
+    saved with your workspace ([`ui/video.py`](ui/video.py),
+    [`ui/timedist.py`](ui/timedist.py), [`ui/state.py`](ui/state.py)).
+  - Each pane's right-click menu only shows what's actually relevant
+    to it: the graph's menu has the data marker actions, the video's
+    menu has the video marker actions and "Sync video to data using
+    markers" -- not both crammed into one menu.
 - Renamed the right-click "Cut" action on any pane (graph, video,
   etc.) to "Remove", and added "Minimize", which hides the pane and
   drops a small labeled tab at the bottom of the window; click the tab
   to bring it back. The tab always stays on top of other panes, and
   minimized state is saved with your workspace
   ([`ui/components.py`](ui/components.py)).
+- The track map can now be panned (click and drag) and zoomed
+  (scroll wheel, centered on the cursor) independently of the graph's
+  own time/distance selection, instead of always auto-fitting to it.
+  Right-click "Reset map view" to go back to auto-fit. The track
+  outline and current-section outline colors are also customizable
+  via right-click ("Track outline color...", "Current section
+  color..."), and persist across restarts ([`ui/map.py`](ui/map.py)).
+- Fixed the video-marker line on the main graph going stale while
+  manually dragging the video alignment slider -- it only refreshed
+  on the next unrelated repaint instead of live, during the drag
+  ([`ui/video.py`](ui/video.py)).
 
 ## Motivation
 

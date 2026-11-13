@@ -163,10 +163,18 @@ class LogRef:
     laps: typing.List['LapRef'] = field(default_factory=list)
     best_lap: typing.Optional['LapRef'] = None
     math_cache: typing.Dict[str, ChannelData] = field(default_factory=dict)
-    # Review/sync markers: out-time (session-absolute ms), same units as
-    # video_alignment and cursor2outTime(). Shares list identity with
-    # DataView.markers[filename] -- see gui.py/datamgr.py for the linkage.
-    markers: typing.List[float] = field(default_factory=list)
+    # Independent review/sync markers, kept deliberately separate so they
+    # can be used to FIND video_alignment rather than assume it: mark the
+    # same real-world moment in the data and in the video, then "Sync
+    # using markers" (ui/video.py) sets video_alignment from the pair.
+    # data_markers: out-time (session-absolute ms, same units as
+    # cursor2outTime()), shown on the graph.
+    # video_markers: the video's own raw playback clock (ms), unaffected
+    # by video_alignment, shown on the video/alignment slider.
+    # Both share list identity with DataView.data_markers/video_markers
+    # [filename] -- see gui.py/datamgr.py for the linkage.
+    data_markers: typing.List[float] = field(default_factory=list)
+    video_markers: typing.List[float] = field(default_factory=list)
 
     def get_channel_data(self, name, unit, maths=None):
         k = (name, unit)
@@ -267,7 +275,8 @@ class DataView:
     log_files: typing.List[LogRef]
     active_component: typing.Optional[QWidget] # widget with current focus
     video_alignment: typing.Dict[str, typing.Tuple[str, int]] # {log_fname: (vid_fname, vid_align)}
-    markers: typing.Dict[str, typing.List[float]] # {log_fname: [out_time_ms, ...]}
+    data_markers: typing.Dict[str, typing.List[float]] # {log_fname: [out_time_ms, ...]}
+    video_markers: typing.Dict[str, typing.List[float]] # {log_fname: [video_clock_ms, ...]}
     maps_key: typing.Optional[typing.Tuple[str, str]] # provider ('maptiler'), key
 
     # channel_overrides contains only those properties explicitly set by the user.

@@ -12,6 +12,7 @@ from PySide6.QtGui import (
     QColor,
     QFontMetrics,
     QGuiApplication,
+    QKeySequence,
     QPainter,
     QPen,
 )
@@ -98,6 +99,35 @@ class TimeDist(widgets.MouseHelperWidget):
         if self.lapView:
             self.addAction(self.time_slip)
 
+        act = QAction(self)
+        act.setSeparator(True)
+        self.addAction(act)
+
+        # Data marker actions. Video marker add/remove/jump and syncing
+        # live on the video's own context menu instead -- see Video in
+        # video.py -- so each pane's menu only shows what's actually
+        # relevant to it.
+
+        act = QAction('Add data marker at cursor', self)
+        act.triggered.connect(self.add_data_marker)
+        act.setShortcut(QKeySequence(Qt.Key_M))
+        self.addAction(act)
+
+        act = QAction('Remove nearest data marker', self)
+        act.triggered.connect(self.remove_nearest_data_marker)
+        act.setShortcut(QKeySequence('Shift+M'))
+        self.addAction(act)
+
+        act = QAction('Jump to previous data marker', self)
+        act.triggered.connect(lambda: self.jump_data_marker(forward=False))
+        act.setShortcut(QKeySequence(Qt.Key_BracketLeft))
+        self.addAction(act)
+
+        act = QAction('Jump to next data marker', self)
+        act.triggered.connect(lambda: self.jump_data_marker(forward=True))
+        act.setShortcut(QKeySequence(Qt.Key_BracketRight))
+        self.addAction(act)
+
         self.setAcceptDrops(True) # for reordering channels
 
         self.drop_indicator = None
@@ -117,6 +147,38 @@ class TimeDist(widgets.MouseHelperWidget):
         else:
             self.tryRemoveChannel('Time Slip')
         self.update()
+
+    # -- Data markers ----------------------------------------------------
+    # See ui/video.py for the matching video_markers and sync_using_markers.
+
+    def add_data_marker(self):
+        lap = self.dataView.ref_lap
+        if not lap: return
+        out_time = self.dataView.cursor2outTime(lap)
+        markers = lap.log.data_markers
+        if not any(abs(m - out_time) < 1 for m in markers): # avoid exact duplicates
+            markers.append(out_time)
+            markers.sort()
+        self.dataView.values_change.emit()
+
+    def remove_nearest_data_marker(self):
+        lap = self.dataView.ref_lap
+        if not lap or not lap.log.data_markers: return
+        out_time = self.dataView.cursor2outTime(lap)
+        nearest = min(lap.log.data_markers, key=lambda m: abs(m - out_time))
+        lap.log.data_markers.remove(nearest)
+        self.dataView.values_change.emit()
+
+    def jump_data_marker(self, forward):
+        lap = self.dataView.ref_lap
+        if not lap or not lap.log.data_markers: return
+        out_time = self.dataView.cursor2outTime(lap)
+        candidates = [m for m in lap.log.data_markers if (m > out_time if forward else m < out_time)]
+        if not candidates: return
+        target = min(candidates) if forward else max(candidates)
+        old_cursor = self.dataView.cursor_time
+        self.dataView.cursor_time = self.dataView.outTime2cursor(lap, target)
+        self.dataView.cursor_change.emit(old_cursor)
 
     def leftDrag(self, rel_pos, abs_pos, saved_state):
         self.dataView.zoom_window = (
@@ -721,17 +783,30 @@ class TimeDist(widgets.MouseHelperWidget):
 
             ph.painter.restore()
 
-        # paint review/sync markers (see ui/video.py's Video.add_marker)
+        # paint review/sync markers (see ui/video.py's Video.add_data_marker
+        # / add_video_marker). video_markers are shown converted through the
+        # CURRENT video_alignment guess, so you can see how far off a video
+        # marker lands from its matching data marker before syncing.
         if self.x_axis:
-            pen = QPen(QColor(255, 140, 0))
-            pen.setStyle(Qt.SolidLine)
-            ph.painter.setPen(pen)
+            data_pen = QPen(QColor(255, 140, 0)) # orange: data markers
+            data_pen.setStyle(Qt.SolidLine)
+            video_pen = QPen(QColor(64, 220, 255)) # cyan: video markers
+            video_pen.setStyle(Qt.DashLine)
             for lapref, _color, _ in self.dataView.get_laps():
-                for m in lapref.log.markers:
+                ph.painter.setPen(data_pen)
+                for m in lapref.log.data_markers:
                     x = self.x_axis.calc(self.dataView.getTDValue(
                         self.dataView.outTime2cursor(lapref, m)))
                     if x >= self.graph_x and x < ph.size.width():
                         ph.painter.drawLine(x, 0, x, y_div)
+                if lapref.log.video_alignment is not None:
+                    ph.painter.setPen(video_pen)
+                    for m in lapref.log.video_markers:
+                        out_time = m - lapref.log.video_alignment
+                        x = self.x_axis.calc(self.dataView.getTDValue(
+                            self.dataView.outTime2cursor(lapref, out_time)))
+                        if x >= self.graph_x and x < ph.size.width():
+                            ph.painter.drawLine(x, 0, x, y_div)
 
         # paint cursor
         if self.x_axis:

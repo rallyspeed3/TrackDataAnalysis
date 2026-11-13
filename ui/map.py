@@ -11,12 +11,14 @@ from PySide6.QtGui import (
     QAction,
     QBrush,
     QColor,
+    QCursor,
     QFont,
     QPen,
     QPixmap,
 )
 from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtWidgets import (
+    QColorDialog,
     QWidget,
 )
 
@@ -50,9 +52,107 @@ class MapBaseWidget(QWidget):
         self.satellite.setChecked(True)
         self.satellite.toggled.connect(self.update)
         self.addAction(self.satellite)
+
+        act = QAction('Reset map view', self)
+        act.triggered.connect(self.reset_view)
+        self.addAction(act)
+
+        act = QAction(self)
+        act.setSeparator(True)
+        self.addAction(act)
+
+        self.outline_color = QColor(
+            self.data_view.config.get('main', 'map_outline_color', fallback='#c0c0c0'))
+        self.section_color = QColor(
+            self.data_view.config.get('main', 'map_section_color', fallback='#ffffff'))
+
+        act = QAction('Track outline color...', self)
+        act.triggered.connect(
+            lambda: self.pick_color('outline_color', 'map_outline_color', 'Track Outline Color'))
+        self.addAction(act)
+
+        act = QAction('Current section color...', self)
+        act.triggered.connect(
+            lambda: self.pick_color('section_color', 'map_section_color', 'Current Section Color'))
+        self.addAction(act)
+
         self.setContextMenuPolicy(Qt.ActionsContextMenu)
 
         self.setMinimumSize(100, 100) # arbitrary, prevents QT rendering bug with docks
+
+        # Pan/zoom state: by default the view auto-fits to the current lap
+        # selection on every repaint (see paint_satellite). Once the user
+        # drags or scrolls, manual_view latches on and the view stays put,
+        # independent of the graph's own zoom/selection, until reset.
+        self.manual_view = False
+        self._pan_start_pos = None
+        self._pan_start_center = None
+
+    def reset_view(self):
+        self.manual_view = False
+        self.update()
+
+    def pick_color(self, attr, config_key, title):
+        color = QColorDialog.getColor(getattr(self, attr), self, title)
+        if color.isValid():
+            setattr(self, attr, color)
+            self.data_view.config['main'][config_key] = color.name()
+            self.update()
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton and hasattr(self, 'lat_scale'):
+            self._pan_start_pos = e.position()
+            self._pan_start_center = (self.center_lat, self.center_long)
+            self.setCursor(QCursor(Qt.ClosedHandCursor))
+            e.accept()
+        else:
+            super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if self._pan_start_pos is not None:
+            # lat_scale/long_scale are calibrated in physical pixels (see
+            # widgets.makePaintHelper), but mouse events report logical
+            # pixels, so convert or panning is off by the DPI ratio.
+            ratio = self.devicePixelRatioF()
+            delta = (e.position() - self._pan_start_pos) * ratio
+            self.manual_view = True
+            self.center_lat = self._pan_start_center[0] - delta.y() / self.lat_scale
+            self.center_long = self._pan_start_center[1] - delta.x() / self.long_scale
+            self.update()
+            e.accept()
+        else:
+            super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self._pan_start_pos = None
+            self._pan_start_center = None
+            self.setCursor(QCursor(Qt.ArrowCursor))
+            e.accept()
+        else:
+            super().mouseReleaseEvent(e)
+
+    def wheelEvent(self, e):
+        if not hasattr(self, 'lat_scale'):
+            return
+        self.manual_view = True
+        factor = 1.0015 ** e.angleDelta().y()
+        ratio = self.devicePixelRatioF() # see mouseMoveEvent: convert logical -> physical pixels
+
+        # zoom centered on the cursor: whatever geo point is under the
+        # mouse stays under the mouse after zooming, like most map UIs.
+        pos = e.position() * ratio
+        geo_long = pos.x() / self.long_scale + self.long_base
+        geo_lat = pos.y() / self.lat_scale + self.lat_base
+        self.lat_scale *= factor
+        self.long_scale *= factor
+        new_long_base = geo_long - pos.x() / self.long_scale
+        new_lat_base = geo_lat - pos.y() / self.lat_scale
+        self.center_lat = new_lat_base + self.height() * ratio / self.lat_scale / 2
+        self.center_long = new_long_base + self.width() * ratio / self.long_scale / 2
+
+        self.update()
+        e.accept()
 
     def handle_update(self, k, fut):
         pm = QPixmap()
@@ -68,36 +168,46 @@ class MapBaseWidget(QWidget):
         return QSize(400, 400)
 
     def paint_satellite(self, ph, lla_min, lla_max):
-        # first, a center
-        center = (np.array(lla_min) + np.array(lla_max)) / 2
+        if not self.manual_view:
+            # first, a center
+            center = (np.array(lla_min) + np.array(lla_max)) / 2
 
-        # second, compute scale for lat/long
-        delta = 1/1024. # approx 300 ft or so
-        x, y, z = gps.lla2ecef(np.array([center[0], center[0] + delta, center[0]]),
-                               np.array([center[1], center[1],         center[1] + delta]),
-                               center[2])
-        lat_scale = np.linalg.norm(np.array([x[0] - x[1], y[0] - y[1], z[0] - z[1]]))
-        long_scale = np.linalg.norm(np.array([x[0] - x[2], y[0] - y[2], z[0] - z[2]]))
+            # second, compute scale for lat/long
+            delta = 1/1024. # approx 300 ft or so
+            x, y, z = gps.lla2ecef(np.array([center[0], center[0] + delta, center[0]]),
+                                   np.array([center[1], center[1],         center[1] + delta]),
+                                   center[2])
+            lat_scale = np.linalg.norm(np.array([x[0] - x[1], y[0] - y[1], z[0] - z[1]]))
+            long_scale = np.linalg.norm(np.array([x[0] - x[2], y[0] - y[2], z[0] - z[2]]))
 
-        # third, calc bounds for gps, and map to fit in ph.size
-        lat_min = lla_min[0]
-        lat_range = lla_max[0] - lat_min
-        long_min = lla_min[1]
-        long_range = lla_max[1] - long_min
+            # third, calc bounds for gps, and map to fit in ph.size
+            lat_min = lla_min[0]
+            lat_range = lla_max[0] - lat_min
+            long_min = lla_min[1]
+            long_range = lla_max[1] - long_min
 
-        # What's the point of having GPS data if it doesn't move?
-        if lat_range == 0 or long_range == 0: return False
+            # What's the point of having GPS data if it doesn't move?
+            if lat_range == 0 or long_range == 0: return False
 
-        scale = 0.9 * min(ph.size.height() / (lat_range * lat_scale),
-                          ph.size.width() / (long_range * long_scale))
-        lat_scale *= -scale # invert display
-        long_scale *= scale
+            scale = 0.9 * min(ph.size.height() / (lat_range * lat_scale),
+                              ph.size.width() / (long_range * long_scale))
+            lat_scale *= -scale # invert display
+            long_scale *= scale
 
-        lat_base = lat_min + lat_range / 2 - ph.size.height() / lat_scale / 2
-        long_base = long_min + long_range / 2 - ph.size.width() / long_scale / 2
+            self.lat_scale = lat_scale
+            self.long_scale = long_scale
+            self.center_lat = lat_min + lat_range / 2
+            self.center_long = long_min + long_range / 2
 
-        self.lat_scale = lat_scale
-        self.long_scale = long_scale
+        # Pan/zoom (manual_view) only ever changes center_lat/center_long
+        # and lat_scale/long_scale -- recompute lat_base/long_base from
+        # those plus the current widget size every frame, so resizing the
+        # pane re-centers correctly without resetting pan/zoom.
+        lat_scale = self.lat_scale
+        long_scale = self.long_scale
+        lat_base = self.center_lat - ph.size.height() / lat_scale / 2
+        long_base = self.center_long - ph.size.width() / long_scale / 2
+
         self.lat_base = lat_base
         self.long_base = long_base
 
@@ -190,7 +300,7 @@ class MapWidget(MapBaseWidget):
         zoom_x = memoryview((zoom_long - self.long_base) * self.long_scale)
 
         # Background track outline
-        pen = QPen(QColor(192, 192, 192))
+        pen = QPen(self.outline_color)
         pen.setWidth(widgets.deviceScale(self, 1.25))
         ph.painter.setPen(pen)
         if start_idx < zoom_start:
@@ -201,7 +311,7 @@ class MapWidget(MapBaseWidget):
                 ph.painter.drawLine(lap_x[i-1], lap_y[i-1], lap_x[i], lap_y[i])
 
         # Zoom window track outline
-        pen = QPen(QColor(255, 255, 255))
+        pen = QPen(self.section_color)
         pen.setWidth(widgets.deviceScale(self, 2))
         ph.painter.setPen(pen)
         for i in range(1, len(zoom_x)):

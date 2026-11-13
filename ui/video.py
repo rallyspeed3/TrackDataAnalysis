@@ -269,6 +269,10 @@ class AlignmentSlider(widgets.MouseHelperWidget):
         self.data_view.video_alignment[log.log.get_filename()] = (
             log.video_file, log.video_alignment)
         self.data_view.cursor_change.emit(None)
+        # cursor_change(None) is a no-op for TimeDist (see its updateCursor),
+        # so the graph's video-marker line -- which shifts with
+        # video_alignment -- would otherwise go stale while dragging.
+        self.data_view.values_change.emit()
 
     def select_font(self):
         font = QFont('Tahoma')
@@ -330,13 +334,25 @@ class AlignmentSlider(widgets.MouseHelperWidget):
             ph.painter.drawLine(x, y_offset,
                                 x, y_offset + (2 if i % 5 else 4))
 
-        # review/sync markers, converted from out-time to this video's own clock
-        marker_pen = QPen(QColor(255, 140, 0))
-        marker_pen.setStyle(Qt.SolidLine)
-        ph.painter.setPen(marker_pen)
+        # review/sync markers. data_markers are out-time, so convert to this
+        # video's own clock using the CURRENT video_alignment guess; video_markers
+        # are already in that clock natively. Showing both lets you see at a
+        # glance how far apart they are -- that gap is what "Sync using
+        # markers" (see Video.sync_using_markers) turns into video_alignment.
+        data_pen = QPen(QColor(255, 140, 0)) # orange: data markers
+        data_pen.setStyle(Qt.SolidLine)
+        ph.painter.setPen(data_pen)
         video_alignment = self.data_view.ref_lap.log.video_alignment
-        for m in self.data_view.ref_lap.log.markers:
+        for m in self.data_view.ref_lap.log.data_markers:
             x = self.x_axis.calc(m + video_alignment)
+            if 0 <= x < ph.size.width():
+                ph.painter.drawLine(x, 0, x, y_offset)
+
+        video_pen = QPen(QColor(64, 220, 255)) # cyan: video markers
+        video_pen.setStyle(Qt.DashLine)
+        ph.painter.setPen(video_pen)
+        for m in self.data_view.ref_lap.log.video_markers:
+            x = self.x_axis.calc(m)
             if 0 <= x < ph.size.width():
                 ph.painter.drawLine(x, 0, x, y_offset)
 
@@ -366,24 +382,33 @@ class Video(QWidget):
         act.setSeparator(True)
         self.addAction(act)
 
-        act = QAction('Add marker at cursor', self)
-        act.triggered.connect(self.add_marker)
-        act.setShortcut(QKeySequence(Qt.Key_M))
+        # Data marker actions (add/remove/jump) live on the graph's own
+        # context menu instead -- see TimeDist in ui/timedist.py -- so this
+        # menu only shows what's actually about the video.
+
+        act = QAction('Add video marker at current frame', self)
+        act.triggered.connect(self.add_video_marker)
+        act.setShortcut(QKeySequence(Qt.Key_V))
         self.addAction(act)
 
-        act = QAction('Remove nearest marker', self)
-        act.triggered.connect(self.remove_nearest_marker)
-        act.setShortcut(QKeySequence('Shift+M'))
+        act = QAction('Remove nearest video marker', self)
+        act.triggered.connect(self.remove_nearest_video_marker)
+        act.setShortcut(QKeySequence('Shift+V'))
         self.addAction(act)
 
-        act = QAction('Jump to previous marker', self)
-        act.triggered.connect(lambda: self.jump_marker(forward=False))
-        act.setShortcut(QKeySequence(Qt.Key_BracketLeft))
+        act = QAction('Jump video to previous marker', self)
+        act.triggered.connect(lambda: self.jump_video_marker(forward=False))
+        act.setShortcut(QKeySequence('Ctrl+['))
         self.addAction(act)
 
-        act = QAction('Jump to next marker', self)
-        act.triggered.connect(lambda: self.jump_marker(forward=True))
-        act.setShortcut(QKeySequence(Qt.Key_BracketRight))
+        act = QAction('Jump video to next marker', self)
+        act.triggered.connect(lambda: self.jump_video_marker(forward=True))
+        act.setShortcut(QKeySequence('Ctrl+]'))
+        self.addAction(act)
+
+        act = QAction('Sync video to data using markers', self)
+        act.triggered.connect(self.sync_using_markers)
+        act.setShortcut(QKeySequence('Ctrl+M'))
         self.addAction(act)
 
         act = QAction(self)
@@ -488,36 +513,59 @@ class Video(QWidget):
             self.videos[0].prev_frame() # secondary will get updateCursor call
 
     # -- Review/sync markers -------------------------------------------
-    # Markers are stored as out-time (session-absolute ms) on the
-    # reference lap's log, the same units as video_alignment, so they
-    # line up whether you're adding one while scrubbing the graph or
-    # the video.
+    # data_markers and video_markers are deliberately independent: a data
+    # marker is placed in the data's own timeline (out-time, same units as
+    # cursor2outTime()) regardless of the video, and a video marker is
+    # placed at the video's own raw playback position regardless of the
+    # data -- so you can mark the same real-world moment in each even
+    # before they're synced, then use sync_using_markers() to compute
+    # video_alignment from the pair. Data marker add/remove/jump live on
+    # the graph's own context menu instead -- see TimeDist in timedist.py.
 
-    def add_marker(self):
+    def _video_time_ms(self):
+        # the reference video's own current raw playback position (ms),
+        # or None if there's no video loaded or it's mid-seek.
+        if not self.videos[0] or self.videos[0].player.time_pos is None:
+            return None
+        return self.videos[0].player.time_pos * 1000
+
+    def add_video_marker(self):
+        video_time = self._video_time_ms()
+        if video_time is None: return
         lap = self.data_view.ref_lap
         if not lap: return
-        out_time = self.data_view.cursor2outTime(lap)
-        markers = lap.log.markers
-        if not any(abs(m - out_time) < 1 for m in markers): # avoid exact duplicates
-            markers.append(out_time)
+        markers = lap.log.video_markers
+        if not any(abs(m - video_time) < 1 for m in markers):
+            markers.append(video_time)
             markers.sort()
         self.data_view.values_change.emit()
 
-    def remove_nearest_marker(self):
+    def remove_nearest_video_marker(self):
         lap = self.data_view.ref_lap
-        if not lap or not lap.log.markers: return
-        out_time = self.data_view.cursor2outTime(lap)
-        nearest = min(lap.log.markers, key=lambda m: abs(m - out_time))
-        lap.log.markers.remove(nearest)
+        video_time = self._video_time_ms()
+        if not lap or not lap.log.video_markers or video_time is None: return
+        nearest = min(lap.log.video_markers, key=lambda m: abs(m - video_time))
+        lap.log.video_markers.remove(nearest)
         self.data_view.values_change.emit()
 
-    def jump_marker(self, forward):
+    def jump_video_marker(self, forward):
         lap = self.data_view.ref_lap
-        if not lap or not lap.log.markers: return
-        out_time = self.data_view.cursor2outTime(lap)
-        candidates = [m for m in lap.log.markers if (m > out_time if forward else m < out_time)]
+        video_time = self._video_time_ms()
+        if not lap or not lap.log.video_markers or video_time is None: return
+        candidates = [m for m in lap.log.video_markers if (m > video_time if forward else m < video_time)]
         if not candidates: return
         target = min(candidates) if forward else max(candidates)
-        old_cursor = self.data_view.cursor_time
-        self.data_view.cursor_time = self.data_view.outTime2cursor(lap, target)
-        self.data_view.cursor_change.emit(old_cursor)
+        self.videos[0].mpv_command_async(None, 'seek', target / 1000, 'absolute', 'exact')
+
+    def sync_using_markers(self):
+        lap = self.data_view.ref_lap
+        if not lap or not lap.log.data_markers or not lap.log.video_markers: return
+        video_time = self._video_time_ms()
+        if video_time is None: return
+        out_time = self.data_view.cursor2outTime(lap)
+        data_marker = min(lap.log.data_markers, key=lambda m: abs(m - out_time))
+        video_marker = min(lap.log.video_markers, key=lambda m: abs(m - video_time))
+        lap.log.video_alignment = video_marker - data_marker
+        self.data_view.video_alignment[lap.log.log.get_filename()] = (
+            lap.log.video_file, lap.log.video_alignment)
+        self.data_view.values_change.emit()
