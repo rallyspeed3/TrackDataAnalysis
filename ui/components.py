@@ -10,9 +10,11 @@ from PySide6.QtGui import (
     QMouseEvent,
     QPaintEvent,
     QPen,
+    QPixmap,
 )
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, Signal
 from PySide6.QtWidgets import (
+    QFileDialog,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -70,9 +72,50 @@ class ComponentManager(QWidget):
         act = QAction('Paste', self)
         act.triggered.connect(self.paste_component)
         self.addAction(act)
+
+        act = QAction(self)
+        act.setSeparator(True)
+        self.addAction(act)
+
+        act = QAction('Set background image...', self)
+        act.triggered.connect(self.pick_background_image)
+        self.addAction(act)
+
+        act = QAction('Clear background image', self)
+        act.triggered.connect(self.clear_background_image)
+        self.addAction(act)
+
         self.setContextMenuPolicy(Qt.ActionsContextMenu)
 
         self.component_clipboard = None
+
+        # Custom worksheet background ("wallpaper"), behind the checkered
+        # default. Persisted as a plain file path in config.ini -- loaded
+        # fresh here rather than cached across worksheets/sessions, since
+        # a moved or deleted file should just fall back quietly.
+        self.background_pixmap = None
+        bg_path = self.dataView.config.get('main', 'canvas_background', fallback=None)
+        if bg_path:
+            pm = QPixmap(bg_path)
+            if not pm.isNull():
+                self.background_pixmap = pm
+
+    def pick_background_image(self):
+        file_name = QFileDialog.getOpenFileName(
+            self, 'Choose a background image', '',
+            'Image files (*.png *.jpg *.jpeg *.bmp)')[0]
+        if not file_name: return
+        pm = QPixmap(file_name)
+        if pm.isNull(): return
+        self.background_pixmap = pm
+        self.dataView.config['main']['canvas_background'] = file_name
+        self.update()
+
+    def clear_background_image(self):
+        self.background_pixmap = None
+        if 'canvas_background' in self.dataView.config['main']:
+            del self.dataView.config['main']['canvas_background']
+        self.update()
 
     def graphMaker(self, cls, *args, **kwargs):
         return lambda: ComponentBase(self, None, self.dataView,
@@ -81,12 +124,26 @@ class ComponentManager(QWidget):
     def paintEvent(self, e: QPaintEvent):
         ph = widgets.makePaintHelper(self, e)
         x1, y1, x2, y2 = ph.rect.getCoords()
-        sz = int(100 * widgets.deviceScaleFactor(self))
-        for cx in range(int(x1 / sz), int(x2 / sz) + 1):
-            for cy in range(int(y1 / sz), int(y2 / sz) + 1):
-                bright = 0 if (cx ^ cy) & 1 else 24
-                ph.painter.fillRect(QRect(cx * sz, cy * sz, sz, sz),
-                                    QColor(bright, bright, bright))
+        if self.background_pixmap:
+            # scale to cover the whole canvas (preserving aspect ratio,
+            # cropping overflow), like a desktop wallpaper set to "Fill"
+            target = QRectF(0, 0, self.width(), self.height())
+            scaled = self.background_pixmap.scaled(
+                self.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+            src_x = (scaled.width() - target.width()) / 2
+            src_y = (scaled.height() - target.height()) / 2
+            ph.painter.drawPixmap(target, scaled,
+                                  QRectF(src_x, src_y, target.width(), target.height()))
+            # dim it so panes on top stay readable
+            ph.painter.fillRect(QRect(int(x1), int(y1), int(x2 - x1), int(y2 - y1)),
+                                QColor(0, 0, 0, 110))
+        else:
+            sz = int(100 * widgets.deviceScaleFactor(self))
+            for cx in range(int(x1 / sz), int(x2 / sz) + 1):
+                for cy in range(int(y1 / sz), int(y2 / sz) + 1):
+                    bright = 0 if (cx ^ cy) & 1 else 24
+                    ph.painter.fillRect(QRect(cx * sz, cy * sz, sz, sz),
+                                        QColor(bright, bright, bright))
 
     def resizeLambda(self):
         return lambda p: QPointF(p.x() * self.size().width(),

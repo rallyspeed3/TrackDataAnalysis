@@ -73,6 +73,13 @@ work -- if you want the original, use the link above.
   it's one shared setting, not per-graph), persisted in config.ini
   ([`ui/state.py`](ui/state.py), [`ui/timedist.py`](ui/timedist.py),
   [`gui.py`](gui.py)).
+- Added a custom background image ("wallpaper") for the worksheet
+  canvas behind your panes -- right-click the empty canvas area ->
+  "Set background image..." (or "Clear background image" to go back
+  to the default checkerboard). Scales to fill the canvas and is
+  dimmed so panes on top stay readable; persisted in config.ini, with
+  a missing/moved file just falling back quietly
+  ([`ui/components.py`](ui/components.py)).
 - Added a loader for the plain CAN-bus CSV logs produced by the
   companion mazda3-telemetry-toolkit project (no GPS, no lap-beacon
   channel). Distance comes from integrating the 'speed' channel, so
