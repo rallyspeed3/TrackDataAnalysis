@@ -15,6 +15,7 @@ from PySide6.QtGui import (
     QColor,
     QFont,
     QFontMetrics,
+    QKeySequence,
     QOffscreenSurface,
     QOpenGLContext,
     QPen,
@@ -329,6 +330,16 @@ class AlignmentSlider(widgets.MouseHelperWidget):
             ph.painter.drawLine(x, y_offset,
                                 x, y_offset + (2 if i % 5 else 4))
 
+        # review/sync markers, converted from out-time to this video's own clock
+        marker_pen = QPen(QColor(255, 140, 0))
+        marker_pen.setStyle(Qt.SolidLine)
+        ph.painter.setPen(marker_pen)
+        video_alignment = self.data_view.ref_lap.log.video_alignment
+        for m in self.data_view.ref_lap.log.markers:
+            x = self.x_axis.calc(m + video_alignment)
+            if 0 <= x < ph.size.width():
+                ph.painter.drawLine(x, 0, x, y_offset)
+
 
 class Video(QWidget):
     def __init__(self, data_view, state=None):
@@ -338,14 +349,41 @@ class Video(QWidget):
         self.play_button = QAction('Play', self)
         #button.triggered.connect(self.media_player.play)
         self.play_button.triggered.connect(self.play_cb)
+        self.play_button.setShortcut(QKeySequence(Qt.Key_Space))
         self.addAction(self.play_button)
 
         act = QAction('Next frame', self)
         act.triggered.connect(self.next_frame)
+        act.setShortcut(QKeySequence(Qt.Key_Right))
         self.addAction(act)
 
         act = QAction('Prev frame', self)
         act.triggered.connect(self.prev_frame)
+        act.setShortcut(QKeySequence(Qt.Key_Left))
+        self.addAction(act)
+
+        act = QAction(self)
+        act.setSeparator(True)
+        self.addAction(act)
+
+        act = QAction('Add marker at cursor', self)
+        act.triggered.connect(self.add_marker)
+        act.setShortcut(QKeySequence(Qt.Key_M))
+        self.addAction(act)
+
+        act = QAction('Remove nearest marker', self)
+        act.triggered.connect(self.remove_nearest_marker)
+        act.setShortcut(QKeySequence('Shift+M'))
+        self.addAction(act)
+
+        act = QAction('Jump to previous marker', self)
+        act.triggered.connect(lambda: self.jump_marker(forward=False))
+        act.setShortcut(QKeySequence(Qt.Key_BracketLeft))
+        self.addAction(act)
+
+        act = QAction('Jump to next marker', self)
+        act.triggered.connect(lambda: self.jump_marker(forward=True))
+        act.setShortcut(QKeySequence(Qt.Key_BracketRight))
         self.addAction(act)
 
         act = QAction(self)
@@ -448,3 +486,38 @@ class Video(QWidget):
     def prev_frame(self):
         if self.videos[0]:
             self.videos[0].prev_frame() # secondary will get updateCursor call
+
+    # -- Review/sync markers -------------------------------------------
+    # Markers are stored as out-time (session-absolute ms) on the
+    # reference lap's log, the same units as video_alignment, so they
+    # line up whether you're adding one while scrubbing the graph or
+    # the video.
+
+    def add_marker(self):
+        lap = self.data_view.ref_lap
+        if not lap: return
+        out_time = self.data_view.cursor2outTime(lap)
+        markers = lap.log.markers
+        if not any(abs(m - out_time) < 1 for m in markers): # avoid exact duplicates
+            markers.append(out_time)
+            markers.sort()
+        self.data_view.values_change.emit()
+
+    def remove_nearest_marker(self):
+        lap = self.data_view.ref_lap
+        if not lap or not lap.log.markers: return
+        out_time = self.data_view.cursor2outTime(lap)
+        nearest = min(lap.log.markers, key=lambda m: abs(m - out_time))
+        lap.log.markers.remove(nearest)
+        self.data_view.values_change.emit()
+
+    def jump_marker(self, forward):
+        lap = self.data_view.ref_lap
+        if not lap or not lap.log.markers: return
+        out_time = self.data_view.cursor2outTime(lap)
+        candidates = [m for m in lap.log.markers if (m > out_time if forward else m < out_time)]
+        if not candidates: return
+        target = min(candidates) if forward else max(candidates)
+        old_cursor = self.data_view.cursor_time
+        self.data_view.cursor_time = self.data_view.outTime2cursor(lap, target)
+        self.data_view.cursor_change.emit(old_cursor)

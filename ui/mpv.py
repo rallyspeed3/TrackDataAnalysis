@@ -1326,9 +1326,18 @@ class MPV(object):
     def _encode_options(options):
         return ','.join('{}={}'.format(_py_to_mpv(str(key)), str(val)) for key, val in options.items())
 
-    def loadfile(self, filename, mode='replace', **options):
+    def loadfile(self, filename, mode='replace', index=None, **options):
         """Mapped mpv loadfile command, see man mpv(1)."""
-        self.command('loadfile', filename.encode(fs_enc), mode, MPV._encode_options(options))
+        # libmpv >= 0.38.0 added an 'index' argument between flags and
+        # options; sending only 3 args to a newer libmpv makes it misparse
+        # the options string as the index, raising MPV_ERROR_INVALID_PARAMETER.
+        version_match = re.search(r'v(\d+)\.(\d+)\.(\d+)', self.mpv_version)
+        if version_match and tuple(map(int, version_match.groups())) >= (0, 38, 0):
+            if index is None:
+                index = -1
+            self.command('loadfile', filename.encode(fs_enc), mode, index, MPV._encode_options(options))
+        else:
+            self.command('loadfile', filename.encode(fs_enc), mode, MPV._encode_options(options))
 
     def loadlist(self, playlist, mode='replace'):
         """Mapped mpv loadlist command, see man mpv(1)."""

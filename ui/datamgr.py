@@ -527,6 +527,7 @@ class DataDockWidget(TempDockWidget):
             progress.deleteLater()
 
         logref = state.LogRef(data.distance.DistanceWrapper(obj))
+        logref.markers = self.data_view.markers.setdefault(logref.log.get_filename(), [])
         self.data_view.log_files.append(logref)
         if len(self.data_view.log_files) > 1:
             if self.data_view.track:

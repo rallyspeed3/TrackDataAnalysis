@@ -59,12 +59,13 @@ def VBOX(fname, progress):
     timecodes = (timecodes - timecodes[0]) * 1000 # rebase to 0 and convert to ms
 
     channels = {}
+    channel_units = groups.get('channel units', [])
     next_unit = 0
     for ch in groups['header']:
         try:
             unit = builtin_channels[ch]
         except KeyError:
-            unit = groups['channel units'][next_unit]
+            unit = channel_units[next_unit] if next_unit < len(channel_units) else ''
             next_unit += 1
         if ch != 'time':
             val = data[::nch]
@@ -80,21 +81,27 @@ def VBOX(fname, progress):
                                         interpolate=True)
         data = data[1:]
 
-    # Lap timing based on given marker
-    marker = [float(f) for f in groups['laptiming'][0].split()[1:5]]
-    marker = [(marker[1] + marker[3]) / 120,
-              (marker[0] + marker[2]) / -120]
-    xyz = np.column_stack(gps.lla2ecef(channels['latitude'].values,
-                                       channels['longitude'].values,
-                                       channels['height'].values))
-    lap_markers = gps.find_laps(xyz,
-                                timecodes,
-                                marker)
-    if lap_markers:
-        lap_markers = [0] + lap_markers + [timecodes[-1]]
-        laps = [base.Lap(idx, start, end)
-                for idx, (start, end) in enumerate(zip(lap_markers[:-1], lap_markers[1:]))]
-    else:
+    # Lap timing based on given marker, if the file provides one
+    laps = None
+    if groups.get('laptiming') and 'latitude' in channels and 'longitude' in channels:
+        marker = [float(f) for f in groups['laptiming'][0].split()[1:5]]
+        marker = [(marker[1] + marker[3]) / 120,
+                  (marker[0] + marker[2]) / -120]
+        if 'height' in channels:
+            height = channels['height'].values
+        else:
+            height = np.zeros_like(channels['latitude'].values)
+        xyz = np.column_stack(gps.lla2ecef(channels['latitude'].values,
+                                           channels['longitude'].values,
+                                           height))
+        lap_markers = gps.find_laps(xyz,
+                                    timecodes,
+                                    marker)
+        if lap_markers:
+            lap_markers = [0] + lap_markers + [timecodes[-1]]
+            laps = [base.Lap(idx, start, end)
+                    for idx, (start, end) in enumerate(zip(lap_markers[:-1], lap_markers[1:]))]
+    if laps is None:
         laps = [base.Lap(0, 0, timecodes[-1])]
 
     # XXX INFER LONG/LAT/VERT G
@@ -103,7 +110,7 @@ def VBOX(fname, progress):
 
     # No metadata is provided, but lets parse out the Utc value to determine data/time
     metadata = {}
-    if groups[''][0].startswith('File created on'):
+    if groups[''] and groups[''][0].startswith('File created on'):
         v = groups[''][0].split(' ')
         metadata['Log Date'] = v[3] # reorder fields for US audience?
         metadata['Log Time'] = v[5]

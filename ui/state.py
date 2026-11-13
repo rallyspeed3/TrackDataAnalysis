@@ -163,6 +163,10 @@ class LogRef:
     laps: typing.List['LapRef'] = field(default_factory=list)
     best_lap: typing.Optional['LapRef'] = None
     math_cache: typing.Dict[str, ChannelData] = field(default_factory=dict)
+    # Review/sync markers: out-time (session-absolute ms), same units as
+    # video_alignment and cursor2outTime(). Shares list identity with
+    # DataView.markers[filename] -- see gui.py/datamgr.py for the linkage.
+    markers: typing.List[float] = field(default_factory=list)
 
     def get_channel_data(self, name, unit, maths=None):
         k = (name, unit)
@@ -263,6 +267,7 @@ class DataView:
     log_files: typing.List[LogRef]
     active_component: typing.Optional[QWidget] # widget with current focus
     video_alignment: typing.Dict[str, typing.Tuple[str, int]] # {log_fname: (vid_fname, vid_align)}
+    markers: typing.Dict[str, typing.List[float]] # {log_fname: [out_time_ms, ...]}
     maps_key: typing.Optional[typing.Tuple[str, str]] # provider ('maptiler'), key
 
     # channel_overrides contains only those properties explicitly set by the user.

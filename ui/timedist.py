@@ -721,6 +721,18 @@ class TimeDist(widgets.MouseHelperWidget):
 
             ph.painter.restore()
 
+        # paint review/sync markers (see ui/video.py's Video.add_marker)
+        if self.x_axis:
+            pen = QPen(QColor(255, 140, 0))
+            pen.setStyle(Qt.SolidLine)
+            ph.painter.setPen(pen)
+            for lapref, _color, _ in self.dataView.get_laps():
+                for m in lapref.log.markers:
+                    x = self.x_axis.calc(self.dataView.getTDValue(
+                        self.dataView.outTime2cursor(lapref, m)))
+                    if x >= self.graph_x and x < ph.size.width():
+                        ph.painter.drawLine(x, 0, x, y_div)
+
         # paint cursor
         if self.x_axis:
             x = self.x_axis.calc(self.dataView.getTDValue(self.dataView.cursor_time))

@@ -98,6 +98,7 @@ class MainWindow(QMainWindow):
                                            log_files=[],
                                            active_component=None,
                                            video_alignment={},
+                                           markers={},
                                            maps_key=None,
 
                                            channel_overrides={},
@@ -409,6 +410,12 @@ class MainWindow(QMainWindow):
             ws_data = json.load(f)
         self.layout_mgr.load_state(ws_data['layout'])
         self.data_view.video_alignment = ws_data['videos']
+        self.data_view.markers = ws_data.get('markers', {})
+        # existing open logs hold their own reference to their marker list;
+        # re-link them to the newly loaded store (see datamgr.py's open_file)
+        for logref in self.data_view.log_files:
+            fname = logref.log.get_filename()
+            logref.markers = self.data_view.markers.setdefault(fname, [])
         self.data_view.channel_overrides = ws_data.get('channels', {})
         self.data_view.maths.groups = {k: dacite.from_dict(data_class=ui.state.MathGroup, data=v)
                                        for k, v in ws_data.get('math_groups', {}).items()}
@@ -422,6 +429,7 @@ class MainWindow(QMainWindow):
         with ui.state.atomic_write(self.workspace_fname) as f:
             json.dump({'layout': self.layout_mgr.save_state(),
                        'videos': self.data_view.video_alignment,
+                       'markers': self.data_view.markers,
                        'channels': self.data_view.channel_overrides,
                        'math_groups': {k: dataclasses.asdict(v)
                                        for k, v in self.data_view.maths.groups.items()},

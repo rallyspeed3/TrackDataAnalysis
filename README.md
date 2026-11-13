@@ -1,4 +1,31 @@
-# Track Data Analysis
+# Track Data Analysis (fork)
+
+This is a personal fork of [racer-coder/TrackDataAnalysis](https://github.com/racer-coder/TrackDataAnalysis)
+by Scott Smith -- all credit for the original design and implementation
+goes to him. This fork exists because the upstream project hasn't seen
+updates in a while; changes here are AI-assisted (built with Claude) and
+not reviewed by someone with deep knowledge of the codebase, so treat
+them accordingly. No PRs or issues are being filed upstream for this
+work -- if you want the original, use the link above.
+
+### Changes in this fork
+
+- Fixed a `loadfile` crash (`ValueError: Invalid value for mpv parameter`)
+  when playing video on modern libmpv (>= 0.38.0), which changed the
+  `loadfile` command's argument order ([`ui/mpv.py`](ui/mpv.py)).
+- Made the RaceLogic `.vbo` parser tolerant of files missing a
+  `[laptiming]` section, a `height` channel, or a full `[channel units]`
+  list, instead of crashing on `KeyError`/`IndexError`
+  ([`data/racelogic.py`](data/racelogic.py)).
+- Added keyboard shortcuts for video playback: Space to play/pause,
+  Left/Right arrow to step back/forward one frame
+  ([`ui/video.py`](ui/video.py)).
+- Added review/sync markers: `M` drops a marker at the cursor,
+  `Shift+M` removes the nearest one, `[`/`]` jump to the previous/next
+  marker. Markers show up as orange vertical lines on both the
+  time/distance graph and the video alignment slider, and are saved
+  with your workspace ([`ui/video.py`](ui/video.py),
+  [`ui/timedist.py`](ui/timedist.py), [`ui/state.py`](ui/state.py)).
 
 ## Motivation
 
