@@ -24,6 +24,8 @@ from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QFileDialog,
     QGridLayout,
+    QLabel,
+    QVBoxLayout,
     QWidget,
 )
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
@@ -424,9 +426,21 @@ class Video(QWidget):
         act.triggered.connect(self.set_align_mode)
         self.addAction(act)
 
+        self.stack_vertically = QAction('Stack videos vertically', self)
+        self.stack_vertically.setCheckable(True)
+        self.stack_vertically.toggled.connect(lambda _: self.relayout_videos())
+        self.addAction(self.stack_vertically)
+
         self.layout = QGridLayout()
 
         self.videos = [None, None]
+        self.video_containers = [None, None]
+        self.video_area = QWidget()
+        self.video_area_layout = QGridLayout(self.video_area)
+        self.video_area_layout.setContentsMargins(0, 0, 0, 0)
+        self.video_area_layout.setSpacing(2)
+        self.layout.addWidget(self.video_area, 0, 0, 1, 1)
+
         self.update_video_index(0, self.data_view.ref_lap)
         self.update_video_index(1, self.data_view.alt_lap)
 
@@ -455,6 +469,10 @@ class Video(QWidget):
                 self.videos[idx].setParent(None)
                 self.videos[idx].deleteLater()
                 self.videos[idx] = None
+            if self.video_containers[idx]:
+                self.video_containers[idx].setParent(None)
+                self.video_containers[idx].deleteLater()
+                self.video_containers[idx] = None
         else:
             if not lap.log.video_file:
                 try:
@@ -466,7 +484,34 @@ class Video(QWidget):
                         self.update_video_index(idx, None)
             if not self.videos[idx]:
                 self.videos[idx] = OneVideo(self.data_view, idx == 1)
-                self.layout.addWidget(self.videos[idx], 0, idx, 1, 1)
+
+                container = QWidget()
+                vlayout = QVBoxLayout(container)
+                vlayout.setContentsMargins(0, 0, 0, 0)
+                vlayout.setSpacing(0)
+                label = QLabel('Alternate' if idx == 1 else 'Reference')
+                label.setAlignment(Qt.AlignCenter)
+                label.setStyleSheet('background-color: #282828; color: #d8d8d8; padding: 2px;')
+                vlayout.addWidget(label)
+                vlayout.addWidget(self.videos[idx], 1)
+                self.video_containers[idx] = container
+                self.relayout_videos()
+
+    def relayout_videos(self):
+        # Decoupled from self.layout's own rows (which also hosts the
+        # alignment slider below) so toggling orientation never collides
+        # with it -- just re-places the ref/alt containers within
+        # video_area_layout's own grid.
+        for container in self.video_containers:
+            if container:
+                self.video_area_layout.removeWidget(container)
+        stacked = self.stack_vertically.isChecked()
+        for idx, container in enumerate(self.video_containers):
+            if container:
+                if stacked:
+                    self.video_area_layout.addWidget(container, idx, 0)
+                else:
+                    self.video_area_layout.addWidget(container, 0, idx)
 
     def updateCursor(self, old_cursor):
         self.update_video_index(0, self.data_view.ref_lap)

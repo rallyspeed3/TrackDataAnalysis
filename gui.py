@@ -9,7 +9,7 @@ import os
 import sys
 
 from PySide6.QtCore import QSize, QStandardPaths, Qt, Signal
-from PySide6.QtGui import QKeySequence
+from PySide6.QtGui import QColor, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -79,6 +79,14 @@ class MainWindow(QMainWindow):
         self.config_fname = (QStandardPaths.writableLocation(QStandardPaths.AppLocalDataLocation)
                              + '/config.ini')
         self.config.read(self.config_fname)
+
+        # Restore customized ref/alt lap colors, if any (see
+        # ui/timedist.py's "Reference/Alternate lap color..." actions,
+        # which write these same keys when the user picks a new one).
+        for i in (0, 1):
+            val = self.config.get('main', 'lap_color_%d' % i, fallback=None)
+            if val:
+                ui.state.lap_colors[i] = QColor(val)
 
         # upgrade from old versions
         if 'database_scan_dirs' not in self.config['main']:

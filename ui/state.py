@@ -19,7 +19,12 @@ from data import gps
 from data import math_eval
 
 # belongs in a theme file, but ...
-lap_colors = (
+# A mutable list (not a tuple) so the ref/alt color pickers in
+# ui/timedist.py's right-click menu can change lap_colors[0]/[1] in place
+# and have every consumer (ui/datamgr.py, ui/liftcoast.py, ui/scatter.py,
+# get_laps() below, ...) pick it up immediately -- they all re-read this
+# shared list fresh rather than caching it.
+lap_colors = [
     QtGui.QColor(240, 0, 0),
     QtGui.QColor(223, 223, 223),
     QtGui.QColor(64, 255, 64),
@@ -29,7 +34,7 @@ lap_colors = (
     QtGui.QColor(255, 106, 218),
     QtGui.QColor(244, 244, 0),
     QtGui.QColor(255, 160, 32),
-    )
+    ]
 
 @dataclass(eq=False)
 class ChannelProperties:

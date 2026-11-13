@@ -38,6 +38,56 @@ work -- if you want the original, use the link above.
     to it: the graph's menu has the data marker actions, the video's
     menu has the video marker actions and "Sync video to data using
     markers" -- not both crammed into one menu.
+  - Added "Sync alt lap to ref lap using markers" (`Ctrl+Shift+M`,
+    graph menu) -- the same idea as syncing video to data, but for
+    aligning two *logs* against each other. Useful as a GPS-free
+    "start/finish line": drop a data marker on the same real-world
+    moment in each run's log (the ref lap's and the alt lap's), and
+    this computes the alt lap's offset from that pair, matching
+    whichever display mode (time or distance) the graph is
+    currently in. Also fixed marker rendering to use the same
+    position formula `paintGraph` actually draws channel traces with
+    -- markers were using a different (lap-relative) conversion, so
+    after syncing, the data visibly snapped into alignment but a
+    marker barely moved, making it look stuck
+    ([`ui/timedist.py`](ui/timedist.py)).
+- Added "Split channels by log (stacked)" (graph right-click menu) --
+  instead of overlaying each compared lap's same channel on one row
+  in different colors, stacks them as separate rows (ref's Throttle,
+  alt's Throttle, ref's Brake, alt's Brake, ...), sharing a Y-axis
+  scale per channel so sibling rows stay comparable, with the shared
+  cursor crossing all of them at once. Each row keeps its channel's
+  own color (the same one "Edit channel..." sets, right-click a
+  channel's name) instead of flattening every channel in a lap to
+  that lap's color -- once each row is already labeled R:/A:, there's
+  no need to do that just to tell the logs apart
+  ([`ui/timedist.py`](ui/timedist.py)).
+- Added "Stack videos vertically" (video right-click menu) for the
+  ref/alt video comparison view, as an alternative to the default
+  side-by-side layout. Each video now also has a small "Reference" /
+  "Alternate" label above it either way, so it's clear which is
+  which ([`ui/video.py`](ui/video.py)).
+- Added "Reference lap color..." / "Alternate lap color..." (graph
+  right-click menu) to customize the colors used for ref/alt
+  throughout the app (graphs, Data dock, lift & coast, XY scatter --
+  it's one shared setting, not per-graph), persisted in config.ini
+  ([`ui/state.py`](ui/state.py), [`ui/timedist.py`](ui/timedist.py),
+  [`gui.py`](gui.py)).
+- Added a loader for the plain CAN-bus CSV logs produced by the
+  companion mazda3-telemetry-toolkit project (no GPS, no lap-beacon
+  channel). Distance comes from integrating the 'speed' channel, so
+  it works fine without GPS; each file loads as a single lap, which
+  is enough to compare separate *runs* against each other (open
+  several CSVs and pick ref/alt/extra laps from different files, via
+  the Data dock's R/A columns -- see "Comparing runs" below) -- just
+  not multiple laps within one recording. Also added `*.csv` to the
+  File > Open dialog's file-type filter (it has its own list,
+  separate from the file-extension-to-loader mapping) and gave these
+  logs a usable `Log Date`/`Log Time` (from the file's own
+  last-modified time, since the CSV has no wall-clock timestamp
+  anywhere) -- the Data dock requires both on every open log to sort
+  and group them, and crashed populating itself without them
+  ([`data/mazda_csv.py`](data/mazda_csv.py), [`ui/datamgr.py`](ui/datamgr.py)).
 - Renamed the right-click "Cut" action on any pane (graph, video,
   etc.) to "Remove", and added "Minimize", which hides the pane and
   drops a small labeled tab at the bottom of the window; click the tab
@@ -55,6 +105,36 @@ work -- if you want the original, use the link above.
   manually dragging the video alignment slider -- it only refreshed
   on the next unrelated repaint instead of live, during the drag
   ([`ui/video.py`](ui/video.py)).
+
+## Comparing runs (works without GPS)
+
+Open each run's file (File > Open, or drag onto the window -- multiple
+files at once is fine). The **Data** dock (left sidebar tab) lists every
+open log grouped by date, with a lap under each; its **R** / **A** / **3**
+columns pick which lap is the reference, the alternate (comparison), and
+extra overlay laps, respectively -- across *any* open logs, not just laps
+within one file. Once picked, graphs show both aligned by distance, and
+"Show Time Slip" (right-click a graph) adds the gap-time trace between
+them. This is distance-based, not GPS-based, so it works the same whether
+your logs have GPS or not -- see `data/mazda_csv.py` for a CAN-only
+example, where distance comes from integrating the speed channel instead.
+
+By default both laps' Throttle (say) overlay on one row, in different
+colors. Right-click a graph and check **"Split channels by log
+(stacked)"** to instead stack them as separate rows -- ref's Throttle,
+alt's Throttle, ref's Brake, alt's Brake, and so on -- each pair sharing
+the same scale so they're directly comparable, with the shared cursor
+moving across all of them at once. Each row keeps Throttle's/Brake's own
+color (right-click a channel's name -> "Edit channel..." to change it),
+rather than painting everything in that lap the same color.
+
+Each run's own lap "starts" wherever its logging happened to start,
+though, which usually isn't the same real-world point for two separate
+recordings. If that leaves the two runs visibly offset on the graph: pick
+a moment that's identifiable in *both* runs (the start line, a hard brake
+into a landmark corner, whatever stands out), place a data marker there
+in each (`M`), then **"Sync alt lap to ref lap using markers"**
+(`Ctrl+Shift+M`). That's the GPS-free equivalent of a start/finish line.
 
 ## Motivation
 

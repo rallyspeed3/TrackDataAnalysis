@@ -19,6 +19,7 @@ from PySide6.QtGui import (
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, Qt
 from PySide6.QtWidgets import (
     QApplication,
+    QColorDialog,
     QMenu,
 )
 
@@ -42,7 +43,7 @@ class TimeDist(widgets.MouseHelperWidget):
             self.lapView = state['lapView']
             self.channelGroups = state['channels']
             self.current_channel = state['selected']
-            # timeslip is handled later
+            # timeslip and split_by_log are handled later
         else:
             assert lapView is not None
             self.lapView = lapView
@@ -99,6 +100,25 @@ class TimeDist(widgets.MouseHelperWidget):
         if self.lapView:
             self.addAction(self.time_slip)
 
+        self.split_by_log = QAction('Split channels by log (stacked)', self)
+        self.split_by_log.setCheckable(True)
+        self.split_by_log.setChecked(bool(state and state.get('split_by_log')))
+        self.split_by_log.toggled.connect(lambda _: self.update())
+        if self.lapView:
+            self.addAction(self.split_by_log)
+
+        # Ref/alt colors are a shared, global setting (state.lap_colors),
+        # not specific to this one graph -- see pick_lap_color -- but the
+        # graph's own right-click menu is the most natural place to find
+        # the knob for "why is my alt lap white" from.
+        act = QAction('Reference lap color...', self)
+        act.triggered.connect(lambda: self.pick_lap_color(0, 'Reference Lap Color'))
+        self.addAction(act)
+
+        act = QAction('Alternate lap color...', self)
+        act.triggered.connect(lambda: self.pick_lap_color(1, 'Alternate Lap Color'))
+        self.addAction(act)
+
         act = QAction(self)
         act.setSeparator(True)
         self.addAction(act)
@@ -128,6 +148,11 @@ class TimeDist(widgets.MouseHelperWidget):
         act.setShortcut(QKeySequence(Qt.Key_BracketRight))
         self.addAction(act)
 
+        act = QAction('Sync alt lap to ref lap using markers', self)
+        act.triggered.connect(self.sync_laps_using_markers)
+        act.setShortcut(QKeySequence('Ctrl+Shift+M'))
+        self.addAction(act)
+
         self.setAcceptDrops(True) # for reordering channels
 
         self.drop_indicator = None
@@ -139,6 +164,7 @@ class TimeDist(widgets.MouseHelperWidget):
                 'channels': self.channelGroups,
                 'selected': self.current_channel,
                 'timeslip': self.time_slip.isChecked(),
+                'split_by_log': self.split_by_log.isChecked(),
                 }
 
     def toggle_time_slip(self, flag):
@@ -147,6 +173,13 @@ class TimeDist(widgets.MouseHelperWidget):
         else:
             self.tryRemoveChannel('Time Slip')
         self.update()
+
+    def pick_lap_color(self, index, title):
+        color = QColorDialog.getColor(state.lap_colors[index], self, title)
+        if color.isValid():
+            state.lap_colors[index] = color
+            self.dataView.config['main']['lap_color_%d' % index] = color.name()
+            self.dataView.values_change.emit() # global setting -- refresh every open pane, not just this one
 
     # -- Data markers ----------------------------------------------------
     # See ui/video.py for the matching video_markers and sync_using_markers.
@@ -179,6 +212,47 @@ class TimeDist(widgets.MouseHelperWidget):
         old_cursor = self.dataView.cursor_time
         self.dataView.cursor_time = self.dataView.outTime2cursor(lap, target)
         self.dataView.cursor_change.emit(old_cursor)
+
+    def raw_mode_value(self, lapref, out_time):
+        # out_time (session-absolute ms) converted to the same raw value
+        # paintGraph positions channel data with: timecodes directly in
+        # time mode, or outTime2Dist() in distance mode. Deliberately NOT
+        # lapTime2Dist() / outTime2cursor() -- that's a different
+        # (lap-relative) conversion that doesn't match on-screen position.
+        return out_time if self.dataView.mode_time else lapref.log.log.outTime2Dist(out_time)
+
+    def marker_screen_pos(self, lapref, out_time):
+        # Mirrors paintGraph's on-screen positioning formula exactly
+        # (raw_mode_value - lap.start - lap.offset, in the current mode),
+        # so a marker always lines up with the data it's marking -- including
+        # right after sync_laps_using_markers changes lapref.offset.
+        return (self.raw_mode_value(lapref, out_time)
+                - self.dataView.getTDValue(lapref.start)
+                - self.dataView.getTDValue(lapref.offset))
+
+    def sync_laps_using_markers(self):
+        # Equivalent of Video.sync_using_markers, but for aligning two
+        # separate logs/runs against each other instead of a video against
+        # a log -- this is the "start/finish line" for logs with no GPS:
+        # drop a data marker on the same real-world moment in each run
+        # (e.g. the moment you crossed the start line, or any other shared
+        # reference event), then this computes alt_lap's offset from that
+        # pair so both read the same at that point.
+        ref = self.dataView.ref_lap
+        alt = self.dataView.alt_lap
+        if not ref or not alt: return
+        if not ref.log.data_markers or not alt.log.data_markers: return
+        ref_out_time = self.dataView.cursor2outTime(ref)
+        alt_out_time = self.dataView.cursor2outTime(alt)
+        ref_marker = min(ref.log.data_markers, key=lambda m: abs(m - ref_out_time))
+        alt_marker = min(alt.log.data_markers, key=lambda m: abs(m - alt_out_time))
+
+        # Solve in whichever mode (time or distance) is currently
+        # displayed, same as dragging the shift-axis by hand would.
+        ref_screen = self.marker_screen_pos(ref, ref_marker)
+        alt_unshifted = self.raw_mode_value(alt, alt_marker) - self.dataView.getTDValue(alt.start)
+        alt.offset = self.dataView.makeTD(alt_unshifted - ref_screen, False)
+        self.dataView.values_change.emit()
 
     def leftDrag(self, rel_pos, abs_pos, saved_state):
         self.dataView.zoom_window = (
@@ -520,6 +594,84 @@ class TimeDist(widgets.MouseHelperWidget):
         # draw Y axis
         gh.paintYAxis()
 
+    def paintSplitGraph(self, gh, ph, y_offset, height, channel_list, lap_entry, y_range):
+        # Simplified single-lap sibling of paintGraph, used when "Split
+        # channels by log" is on: draws just this one lap's traces for
+        # channel_list, labeled by which lap it is (R/A/3/...), sharing
+        # y_range with its sibling rows so the same channel is drawn to
+        # the same scale across logs and is actually comparable.
+        if not self.x_axis: return
+        gh.graph_area = QRectF(gh.full_graph_area.left(), y_offset,
+                               gh.full_graph_area.width(), height)
+        lap, _color, idx = lap_entry # lap color unused here -- see the comment below
+        gh.setYAxis(*y_range)
+        gh.paintXGrid()
+        gh.paintYGrid()
+
+        row_label = {1: 'R', 2: 'A'}.get(idx, str(idx))
+        font = gh.channel_font
+        fontMetrics = QFontMetrics(font)
+        lines = [] # (text, color) -- each channel keeps its own color
+        # (the same one "Edit channel..." sets), not the ref/alt color --
+        # with every row already labeled R:/A:, there's no need to flatten
+        # channels to one color just to tell the logs apart anymore.
+        for ch in channel_list:
+            d = self.dataView.get_channel_data(lap, ch)
+            if not len(d.values):
+                lines.append(('%s: %s' % (row_label, self.channelName(ch, d.units)),
+                              QColor(160, 160, 160)))
+                continue
+            ch_color = channels.colors[d.color]
+            pen = QPen(ch_color)
+            ph.painter.setPen(pen)
+
+            xa = d.timecodes if self.dataView.mode_time else d.distances
+            lap_base = self.dataView.getTDValue(lap.start) + self.dataView.getTDValue(lap.offset)
+            search = self.x_axis.invert(max(ph.rect.left(), self.graph_x) - 0.5) + lap_base
+            start_idx = max(0, bisect.bisect_left(xa, search) - 1)
+            search = self.x_axis.invert(max(ph.rect.right() + 0.5, self.graph_x)) + lap_base
+            end_idx = min(len(xa), bisect.bisect_right(xa, search) + 1)
+            xa_s = memoryview(np.round(self.x_axis.calc(np.subtract(xa[start_idx:end_idx], lap_base))).astype(int))
+            dv = np.round(gh.y_axis.calc(np.asarray(d.values[start_idx:end_idx]))).astype(int)
+            dvd1 = dv.data
+            xa_uniqval, xa_uniqidx = np.unique(xa_s, return_index=True)
+            umin = np.minimum.reduceat(dv, xa_uniqidx)
+            umax = np.maximum.reduceat(dv, xa_uniqidx)
+            if d.interpolate:
+                dvd2 = dv[1:].data
+            else:
+                dvd2 = dvd1
+                dvval = dv[xa_uniqidx[1:]-1]
+                np.minimum(umin[1:], dvval, out=umin[1:])
+                np.maximum(umax[1:], dvval, out=umax[1:])
+            ph.painter.save()
+            ph.painter.setClipRect(gh.graph_area)
+            for ii in memoryview(xa_uniqidx[1:] - 1):
+                ph.painter.drawLine(xa_s[ii], dvd1[ii], xa_s[ii+1], dvd2[ii])
+            for x, y1, y2 in zip(xa_uniqval.data, umin.data, umax.data):
+                if y1 != y2:
+                    ph.painter.drawLine(x, y1, x, y2)
+            ph.painter.restore()
+
+            main_val = d.interp(self.dataView.cursor2outTime(lap))
+            self.cursor_values.append(gh.y_axis.calc(main_val))
+            lines.append(('%s: %s   %.*f' % (row_label, self.channelName(ch, d.units), d.dec_pts, main_val),
+                          ch_color))
+
+        ph.painter.setFont(font)
+        text_w = max([fontMetrics.horizontalAdvance(t) for t, _c in lines], default=0) + 12
+        ph.painter.fillRect(QRect(QPoint(self.graph_x, y_offset),
+                                  QSize(text_w, fontMetrics.height() * len(lines) + 6)),
+                            QColor(32, 32, 32, 160))
+        y = y_offset + 2
+        for t, c in lines:
+            ph.painter.setPen(QPen(c))
+            ph.painter.drawText(self.graph_x + 6, y, text_w, fontMetrics.height(),
+                                Qt.AlignTop | Qt.AlignLeft | Qt.TextSingleLine, t)
+            y += fontMetrics.height()
+
+        gh.paintYAxis()
+
     def minmax_width(self, channel_font_metrics, d):
         if isinstance(d, list):
             return max(self.minmax_width(channel_font_metrics, x) for x in d)
@@ -692,23 +844,48 @@ class TimeDist(widgets.MouseHelperWidget):
 
         gh.full_graph_area.setTop(graph_y)
 
-        # paint each channel group graph
+        # paint each channel group graph -- normally one row per group, but
+        # "Split channels by log" expands any group with real channels
+        # (not Time Slip, which needs both laps at once) into one row per
+        # lap being compared, so e.g. Throttle shows as separate ref/alt
+        # rows instead of two overlaid lines on one row.
         self.cursor_values = []
         groups = self.channelGroups or [[]]
+        split_laps = self.dataView.get_laps() if (self.split_by_log.isChecked() and self.lapView) else []
+        row_specs = [] # (grp, orig_idx, lap_entry_or_None, y_range_or_None)
+        for i, grp in enumerate(groups):
+            if grp and 'Time Slip' not in grp and len(split_laps) > 1:
+                data = [self.dataView.get_channel_data(lap, ch)
+                        for lap, _c, _idx in split_laps for ch in grp]
+                dmin = min([d.min for d in data if d.min is not None], default=0)
+                dmax = max([d.max for d in data if d.max is not None], default=0)
+                if dmin == dmax:
+                    dmin -= 1
+                    dmax += 1
+                diff = dmax - dmin
+                dmax += diff * .03
+                dmin -= diff * .03
+                for lap_entry in split_laps:
+                    row_specs.append((grp, i, lap_entry, (dmin, dmax)))
+            else:
+                row_specs.append((grp, i, None, None))
         # each graph
         last_cutoff = graph_y
         separation = 6
-        for i, grp in enumerate(groups):
-            next_cutoff = graph_y + i * separation + (i + 1) * (y_div - graph_y - separation * (len(groups) - 1)) // len(groups)
-            self.paintGraph(gh, ph, last_cutoff, next_cutoff - last_cutoff, grp, i)
+        for i, (grp, orig_idx, lap_entry, y_range) in enumerate(row_specs):
+            next_cutoff = graph_y + i * separation + (i + 1) * (y_div - graph_y - separation * (len(row_specs) - 1)) // len(row_specs)
+            if lap_entry is not None:
+                self.paintSplitGraph(gh, ph, last_cutoff, next_cutoff - last_cutoff, grp, lap_entry, y_range)
+            else:
+                self.paintGraph(gh, ph, last_cutoff, next_cutoff - last_cutoff, grp, orig_idx)
             last_cutoff = next_cutoff + separation
 
         # separation lines
         pen = QPen(QColor(64, 64, 64))
         pen.setStyle(Qt.SolidLine)
         ph.painter.setPen(pen)
-        for i in range(1, len(groups)):
-            cutoff = graph_y + i * separation + i * (y_div - graph_y - separation * (len(groups) - 1)) / len(groups)
+        for i in range(1, len(row_specs)):
+            cutoff = graph_y + i * separation + i * (y_div - graph_y - separation * (len(row_specs) - 1)) / len(row_specs)
             ph.painter.drawLine(self.graph_x, cutoff,
                                 ph.size.width(), cutoff)
             ph.painter.drawLine(self.graph_x, cutoff - separation,
@@ -795,16 +972,14 @@ class TimeDist(widgets.MouseHelperWidget):
             for lapref, _color, _ in self.dataView.get_laps():
                 ph.painter.setPen(data_pen)
                 for m in lapref.log.data_markers:
-                    x = self.x_axis.calc(self.dataView.getTDValue(
-                        self.dataView.outTime2cursor(lapref, m)))
+                    x = self.x_axis.calc(self.marker_screen_pos(lapref, m))
                     if x >= self.graph_x and x < ph.size.width():
                         ph.painter.drawLine(x, 0, x, y_div)
                 if lapref.log.video_alignment is not None:
                     ph.painter.setPen(video_pen)
                     for m in lapref.log.video_markers:
                         out_time = m - lapref.log.video_alignment
-                        x = self.x_axis.calc(self.dataView.getTDValue(
-                            self.dataView.outTime2cursor(lapref, out_time)))
+                        x = self.x_axis.calc(self.marker_screen_pos(lapref, out_time))
                         if x >= self.graph_x and x < ph.size.width():
                             ph.painter.drawLine(x, 0, x, y_div)
 

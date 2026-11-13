@@ -37,6 +37,7 @@ import data.aim_xrk
 import data.autosport_labs
 import data.ecumaster
 import data.iracing
+import data.mazda_csv
 import data.megalog
 import data.motec
 import data.racelogic
@@ -457,7 +458,7 @@ class DataDockWidget(TempDockWidget):
         file_names = QFileDialog.getOpenFileNames(self, 'Open data file for analysis',
                                                  self.config.get('main', 'last_open_dir',
                                                                  fallback=os.getcwd()),
-                                                 'Data files (*.adulog *.emuprolog *.ibt *.ld *.log *.mlg *.run *.vbo *.xrk)')[0]
+                                                 'Data files (*.adulog *.csv *.emuprolog *.ibt *.ld *.log *.mlg *.run *.vbo *.xrk)')[0]
         for file_name in file_names:
             if self.open_file(file_name):
                 self.config['main']['last_open_dir'] = os.path.dirname(file_name)
@@ -481,6 +482,8 @@ class DataDockWidget(TempDockWidget):
             return data.racelogic.VBOX
         elif file_name.lower().endswith('.mlg'):
             return data.megalog.Megalog
+        elif file_name.lower().endswith('.csv'):
+            return data.mazda_csv.MazdaCSV
         else:
             return None
 
