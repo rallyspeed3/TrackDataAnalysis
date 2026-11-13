@@ -39,7 +39,7 @@ setup(
                },
                },
     executables = [Executable('gui.py',
-                              base='Win32GUI' if sys.platform == 'win32' else None,
+                              base='gui' if sys.platform == 'win32' else None,
                               shortcut_name='Track Data Analysis',
                               shortcut_dir='StartMenuFolder',
                               )],

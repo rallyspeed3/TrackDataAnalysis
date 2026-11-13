@@ -9,4 +9,5 @@ __pycache__/
 *.cpp
 build/
 dist/
+*.egg-info/
 *.log
