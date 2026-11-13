@@ -26,6 +26,12 @@ work -- if you want the original, use the link above.
   time/distance graph and the video alignment slider, and are saved
   with your workspace ([`ui/video.py`](ui/video.py),
   [`ui/timedist.py`](ui/timedist.py), [`ui/state.py`](ui/state.py)).
+- Renamed the right-click "Cut" action on any pane (graph, video,
+  etc.) to "Remove", and added "Minimize", which hides the pane and
+  drops a small labeled tab at the bottom of the window; click the tab
+  to bring it back. The tab always stays on top of other panes, and
+  minimized state is saved with your workspace
+  ([`ui/components.py`](ui/components.py)).
 
 ## Motivation
 

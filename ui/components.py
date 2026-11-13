@@ -11,8 +11,9 @@ from PySide6.QtGui import (
     QPaintEvent,
     QPen,
 )
-from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, Signal
 from PySide6.QtWidgets import (
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -36,6 +37,15 @@ class ComponentManager(QWidget):
         'timedist': timedist.TimeDist,
         'video': video.Video,
     }
+    type_labels = {
+        histogram.Histogram: 'Histogram',
+        liftcoast.LiftCoast: 'Lift and Coast',
+        scatter.Scatter: 'XY Scatter',
+        sector_table.SectorTable: 'Sector Table',
+        table_builder.TableBuilder: 'Table Builder',
+        video.Video: 'Video',
+    }
+    MINIMIZED_TAB_HEIGHT = 24
 
     def __init__(self, dataView, addMenu):
         super().__init__()
@@ -90,6 +100,7 @@ class ComponentManager(QWidget):
         m = self.resizeLambda()
         for cb in self.findChildren(ComponentBase):
             cb.parentResize(m)
+        self.layout_minimized_tabs()
 
     def updateCursor(self, old_cursor):
         for cb in self.findChildren(ComponentBase):
@@ -115,17 +126,87 @@ class ComponentManager(QWidget):
             cb.deleteLater()
         # install new widgest
         for widg in state:
-            ComponentBase(self, widg['base'], self.dataView,
-                          self.factory[widg['type']](self.dataView, state=widg))
+            cb = ComponentBase(self, widg['base'], self.dataView,
+                               self.factory[widg['type']](self.dataView, state=widg))
+            if len(widg['base']) > 5 and widg['base'][5]:
+                self.minimize_component(cb)
         if not state:
             # need to emit this due to change in active_component/focus
             self.dataView.data_change.emit()
 
-    def cut_component(self, cb):
+    def remove_component(self, cb):
         self.copy_component(cb)
+        if cb.minimized:
+            self.restore_component(cb) # drop its tab first
         self.dataView.active_component = None
         cb.setParent(None)
         cb.deleteLater()
+
+    def component_label(self, cb):
+        cw = cb.childWidget
+        if isinstance(cw, timedist.TimeDist):
+            return 'Time/Distance Graph' if cw.lapView else 'Session Graph'
+        return self.type_labels.get(type(cw), type(cw).__name__)
+
+    def minimize_component(self, cb):
+        if cb.minimized: return
+        cb.minimized = True
+        if self.dataView.active_component is cb.childWidget:
+            self.dataView.active_component = None
+        cb.setVisible(False)
+        label = self.component_label(cb)
+        tab = QPushButton(label, self)
+        tab.setCursor(QCursor(Qt.PointingHandCursor))
+        tab.setToolTip('Restore "%s"' % label)
+        tab.setStyleSheet('''
+            QPushButton {
+                background-color: #3c3c3c;
+                color: #e8e8e8;
+                border: 1px solid #808080;
+                border-bottom: none;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+                padding: 3px 12px;
+            }
+            QPushButton:hover {
+                background-color: #505050;
+            }
+            QPushButton:pressed {
+                background-color: #2a2a2a;
+            }
+        ''')
+        tab.clicked.connect(lambda: self.restore_component(cb))
+        tab.show()
+        cb.minimize_tab = tab
+        self.layout_minimized_tabs()
+
+    def restore_component(self, cb):
+        if not cb.minimized: return
+        cb.minimized = False
+        cb.minimize_tab.setParent(None)
+        cb.minimize_tab.deleteLater()
+        cb.minimize_tab = None
+        cb.setVisible(True)
+        cb.raise_()
+        cb.setFocus()
+        self.layout_minimized_tabs()
+
+    def layout_minimized_tabs(self):
+        x = 4
+        y = self.height() - self.MINIMIZED_TAB_HEIGHT - 4
+        for cb in self.findChildren(ComponentBase):
+            if cb.minimized and cb.minimize_tab:
+                w = cb.minimize_tab.sizeHint().width()
+                cb.minimize_tab.setGeometry(x, y, w, self.MINIMIZED_TAB_HEIGHT)
+                x += w + 4
+        self.raise_minimized_tabs()
+
+    def raise_minimized_tabs(self):
+        # other panes can be dragged/resized/focused above the tab strip,
+        # so keep re-asserting that the tabs stay on top of everything.
+        for cb in self.findChildren(ComponentBase):
+            if cb.minimized and cb.minimize_tab:
+                cb.minimize_tab.raise_()
 
     def copy_component(self, cb):
         self.component_clipboard = cb.childWidget.save_state()
@@ -182,15 +263,25 @@ class ComponentBase(QWidget):
         self.m_isEditing = True
         self.pressedGeometry = None
 
+        self.minimized = False
+        self.minimize_tab = None
+        # A newly created or newly focused pane is placed on top with no
+        # actual stacking-order *change* (so no ZOrderChange event fires,
+        # see event() below) -- catch those cases here instead so a
+        # minimized tab never ends up buried behind it.
+        self.inFocus.connect(lambda _: parent.raise_minimized_tabs())
+
         self.parentResize(parent.resizeLambda())
 
         self.setChildWidget(cWidget)
         self.setFocus()
+        parent.raise_minimized_tabs()
 
 
     def save_state(self):
         return (False, self.fracGeometry.x(), self.fracGeometry.y(),
-                self.fracGeometry.width(), self.fracGeometry.height())
+                self.fracGeometry.width(), self.fracGeometry.height(),
+                self.minimized)
 
     def setChildWidget(self, cWidget):
         if cWidget:
@@ -198,8 +289,12 @@ class ComponentBase(QWidget):
             act.setSeparator(True)
             cWidget.addAction(act)
 
-            act = QAction('Cut', cWidget)
-            act.triggered.connect(lambda: self.parent().cut_component(self))
+            act = QAction('Remove', cWidget)
+            act.triggered.connect(lambda: self.parent().remove_component(self))
+            cWidget.addAction(act)
+
+            act = QAction('Minimize', cWidget)
+            act.triggered.connect(lambda: self.parent().minimize_component(self))
             cWidget.addAction(act)
 
             act = QAction('Copy', cWidget)
@@ -240,6 +335,14 @@ class ComponentBase(QWidget):
         self.outFocus.emit(False)
         self.m_infocus = False
         self.update()
+
+    def event(self, e):
+        # Catch every way this pane's stacking order can change (focus,
+        # an explicit raise_()/lower_(), reparenting, ...) so a minimized
+        # tab never ends up buried behind it, no matter what triggered it.
+        if e.type() == QEvent.Type.ZOrderChange:
+            self.parent().raise_minimized_tabs()
+        return super().event(e)
 
     def paintEvent(self, e: QPaintEvent):
         ph = widgets.makePaintHelper(self, e)
